@@ -10,5 +10,5 @@ A wide range of satellite missions now provide global measurements of atmospheri
 
 This project will integrate these datasets within a machine-learning and complex-systems framework to explore how GHG trends evolve across different regions. Students will investigate questions such as: Where do CO₂ and CH₄ growth rates show unexpected changes? Which patterns are driven by emissions, and which arise from natural variability? Are there emerging anomalies or regional behaviours that standard analyses overlook? This interdisciplinary project is suitable for students from atmospheric science, physics, computer science, or related fields who are interested in working with real-world environmental data and modern analytical tools.
 
-Team : 
+Team : Adrian Gutierrez
 
