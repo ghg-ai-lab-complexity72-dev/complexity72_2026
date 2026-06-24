@@ -12,4 +12,29 @@ This project will integrate these datasets within a machine-learning and complex
 
 Team : Adrian Gutierrez Arroyo
 
+## Interactive dashboard from the .nc file
+
+You can generate a single HTML page with controls for `data variable` and `year/time` directly from the netCDF file using xarray.
+
+### 1) Build the dashboard
+
+```bash
+python build_interactive_dashboard.py \
+	--input unified_annual_carbon_dataset_2015_2024.nc \
+	--output multi_variable_dashboard.html \
+	--max-points 25000
+```
+
+### 2) Open it
+
+Open `multi_variable_dashboard.html` in your browser.
+
+### Notes
+
+- The page is self-contained and interactive (no server needed).
+- Controls let you switch both variable and year.
+- Point size and color are both scaled by the selected variable values; use the `Point Size Scale` slider to tune marker size intensity.
+- The map is rendered with Bokeh and includes country/land outlines from Natural Earth.
+- For speed, map points are sampled, but displayed stats are computed from the full-resolution values for each variable/year.
+
 
