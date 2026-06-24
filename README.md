@@ -10,7 +10,7 @@ A wide range of satellite missions now provide global measurements of atmospheri
 
 This project will integrate these datasets within a machine-learning and complex-systems framework to explore how GHG trends evolve across different regions. Students will investigate questions such as: Where do CO₂ and CH₄ growth rates show unexpected changes? Which patterns are driven by emissions, and which arise from natural variability? Are there emerging anomalies or regional behaviours that standard analyses overlook? This interdisciplinary project is suitable for students from atmospheric science, physics, computer science, or related fields who are interested in working with real-world environmental data and modern analytical tools.
 
-Team : Adrian Gutierrez Arroyo
+Team : Adrian Gutierrez Arroyo, Darja Cvetkovic, Sofia Vasquez Alferez, 
 
 ## Interactive dashboard from the .nc file
 
@@ -33,7 +33,7 @@ Open `multi_variable_dashboard.html` in your browser.
 
 - The page is self-contained and interactive (no server needed).
 - Controls let you switch both variable and year.
-- Point size and color are both scaled by the selected variable values; use the `Point Size Scale` slider to tune marker size intensity.
+- Color is scaled either with normal or log scale.
 - The map is rendered with Bokeh and includes country/land outlines from Natural Earth.
 - For speed, map points are sampled, but displayed stats are computed from the full-resolution values for each variable/year.
 
