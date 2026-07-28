@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+import geopandas as gpd
 import numpy as np
 import xarray as xr
 
@@ -26,11 +27,53 @@ def time_to_label(t: object) -> str:
         return str(t)
 
 
+def load_geo_boundaries() -> dict[str, list[float | None]]:
+    """Loads continent, country, and state outlines using GeoPandas and converts them to Plotly line coordinates."""
+    lons: list[float | None] = []
+    lats: list[float | None] = []
+
+    def add_geometry(geom) -> None:
+        if geom is None or geom.is_empty:
+            return
+        if geom.geom_type == "Polygon":
+            x, y = geom.exterior.coords.xy
+            lons.extend(np.round(x, 3).tolist())
+            lats.extend(np.round(y, 3).tolist())
+            lons.append(None)
+            lats.append(None)
+        elif geom.geom_type == "MultiPolygon":
+            for poly in geom.geoms:
+                add_geometry(poly)
+
+    try:
+        # Load low-resolution Natural Earth datasets for countries and states/provinces
+        world_url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson"
+        states_url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_1_states_provinces.geojson"
+
+        gdf_world = gpd.read_file(world_url)
+        gdf_states = gpd.read_file(states_url)
+
+        for geom in gdf_world.geometry:
+            add_geometry(geom)
+
+        for geom in gdf_states.geometry:
+            add_geometry(geom)
+
+    except Exception as e:
+        print(f"Warning: Could not fetch GeoPandas geographic boundaries ({e}). Map will render without overlays.")
+
+    return {"lon": lons, "lat": lats}
+
+
 def build_payload(ds: xr.Dataset) -> dict:
     payload: dict[str, dict] = {"variables": {}, "meta": {}}
 
     years = [time_to_label(t) for t in ds["time"].values]
     payload["meta"]["years"] = years
+
+    # Extract continent and state boundaries using GeoPandas
+    print("Extracting geographic boundaries using GeoPandas...")
+    payload["meta"]["geo_lines"] = load_geo_boundaries()
 
     for var_name, da in ds.data_vars.items():
         if "time" not in da.dims:
@@ -47,8 +90,12 @@ def build_payload(ds: xr.Dataset) -> dict:
         for t in ds["time"].values:
             label = time_to_label(t)
             da_t = da.sel(time=t).values
-
             da_t = np.asarray(da_t, dtype=np.float64)
+
+            # --- FILTER 'growth_rate' TO VALUES BETWEEN 0 AND 5 ONLY ---
+            if "growth_rate" in var_name.lower():
+                da_t = np.where((da_t >= 0.0) & (da_t <= 5.0), da_t, np.nan)
+
             finite_vals = da_t[np.isfinite(da_t)]
 
             if finite_vals.size == 0:
@@ -268,7 +315,7 @@ def render_html(payload: dict, title: str) -> str:
       <div class="panel"><div id="mapPlot" class="plot"></div></div>
       <div class="panel"><div id="kdePlot" class="plot"></div></div>
     </div>
-    <div class="note">Rendered as a full pixel raster grid alongside Gaussian Kernel Density Estimation (KDE).</div>
+    <div class="note">Rendered with GeoPandas continent/state overlays alongside Gaussian Kernel Density Estimation (KDE).</div>
   </div>
   <script>
     const DATA = {payload_json};
@@ -280,7 +327,6 @@ def render_html(payload: dict, title: str) -> str:
     const kdeYScaleSelect = document.getElementById("kdeYScaleSelect");
     const statsEl = document.getElementById("stats");
 
-    // Anchor points for Turbo palette interpolation
     const PALETTE_TURBO = [
       [0.188, 0.071, 0.231],
       [0.243, 0.235, 0.651],
@@ -392,7 +438,6 @@ def render_html(payload: dict, title: str) -> str:
         .join("");
     }}
 
-    // Gaussian Kernel Density Estimation with support for linear or logarithmic evaluation grids
     function computeKDE(values, isLogX = false, gridPoints = 200) {{
       let validVals = values;
       if (isLogX) {{
@@ -457,11 +502,10 @@ def render_html(payload: dict, title: str) -> str:
       const minVal = spec.range.min;
       const maxVal = spec.range.max;
 
-      // Generate colorscale
       const customColorscale = generateColorscale(scaleType, minVal, maxVal, flatValues);
       const titleSuffix = scaleType === "log" ? " (Log Colorscale)" : " (Linear Colorscale)";
 
-      // Heatmap Plot
+      // Heatmap
       const mapTrace = {{
         type: "heatmap",
         z: rawGrid,
@@ -475,6 +519,18 @@ def render_html(payload: dict, title: str) -> str:
         hoverongaps: false
       }};
 
+      // Overlay GeoPandas continent/state boundary line trace
+      const geoLines = DATA.meta.geo_lines || {{ lon: [], lat: [] }};
+      const outlineTrace = {{
+        type: "scatter",
+        mode: "lines",
+        x: geoLines.lon,
+        y: geoLines.lat,
+        line: {{ color: "rgba(35, 35, 35, 0.7)", width: 0.8 }},
+        hoverinfo: "skip",
+        showlegend: false
+      }};
+
       const mapLayout = {{
         title: `${{variable}} raster (${{year}})${{titleSuffix}}`,
         margin: {{ l: 40, r: 10, t: 42, b: 40 }},
@@ -483,15 +539,15 @@ def render_html(payload: dict, title: str) -> str:
         template: "plotly_white"
       }};
 
-      Plotly.react("mapPlot", [mapTrace], mapLayout, {{ responsive: true, displaylogo: false }});
+      Plotly.react("mapPlot", [mapTrace, outlineTrace], mapLayout, {{ responsive: true, displaylogo: false }});
 
-      // Compute KDE Density Plot
+      // KDE Density Plot
       const kdeData = computeKDE(flatValues, kdeXScale === "log");
 
       let yPlot = kdeData.y;
       if (kdeYScale === "log") {{
         const maxY = Math.max(...yPlot);
-        const minYFloor = maxY * 1e-6; // Clamp baseline floor for log axis
+        const minYFloor = maxY * 1e-6;
         yPlot = yPlot.map(y => (y > minYFloor ? y : minYFloor));
       }}
 
@@ -549,7 +605,7 @@ def render_html(payload: dict, title: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build an interactive pixel-raster HTML dashboard with KDE from a netCDF dataset."
+        description="Build an interactive pixel-raster HTML dashboard with GeoPandas boundaries and KDE."
     )
     parser.add_argument(
         "--input",
@@ -560,7 +616,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("multi_variable_dashboard.html"),
+        default=Path("index.html"),
         help="Output HTML file path.",
     )
     args = parser.parse_args()
