@@ -46,7 +46,6 @@ def load_geo_boundaries() -> dict[str, list[float | None]]:
                 add_geometry(poly)
 
     try:
-        # Load low-resolution Natural Earth datasets for countries and states/provinces
         world_url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson"
         states_url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_1_states_provinces.geojson"
 
@@ -71,7 +70,6 @@ def build_payload(ds: xr.Dataset) -> dict:
     years = [time_to_label(t) for t in ds["time"].values]
     payload["meta"]["years"] = years
 
-    # Extract continent and state boundaries using GeoPandas
     print("Extracting geographic boundaries using GeoPandas...")
     payload["meta"]["geo_lines"] = load_geo_boundaries()
 
@@ -206,7 +204,7 @@ def render_html(payload: dict, title: str) -> str:
     .control {{
       display: grid;
       gap: 4px;
-      min-width: 150px;
+      min-width: 160px;
     }}
     label {{
       font-size: 0.8rem;
@@ -256,12 +254,12 @@ def render_html(payload: dict, title: str) -> str:
       border: 1px solid var(--border);
       border-radius: 12px;
       overflow: hidden;
-      min-height: 420px;
+      min-height: 440px;
     }}
     .plot {{
       width: 100%;
       height: 100%;
-      min-height: 420px;
+      min-height: 440px;
     }}
     .note {{
       margin-top: 10px;
@@ -270,7 +268,7 @@ def render_html(payload: dict, title: str) -> str:
     }}
     @media (max-width: 960px) {{
       .grid {{ grid-template-columns: 1fr; }}
-      .panel, .plot {{ min-height: 360px; }}
+      .panel, .plot {{ min-height: 380px; }}
     }}
   </style>
 </head>
@@ -295,15 +293,8 @@ def render_html(payload: dict, title: str) -> str:
           </select>
         </div>
         <div class="control">
-          <label for="kdeXScaleSelect">KDE X Scale</label>
-          <select id="kdeXScaleSelect">
-            <option value="linear">Linear</option>
-            <option value="log">Logarithmic</option>
-          </select>
-        </div>
-        <div class="control">
-          <label for="kdeYScaleSelect">KDE Y Scale</label>
-          <select id="kdeYScaleSelect">
+          <label for="profileXScaleSelect">Profile X Scale</label>
+          <select id="profileXScaleSelect">
             <option value="linear">Linear</option>
             <option value="log">Logarithmic</option>
           </select>
@@ -313,9 +304,9 @@ def render_html(payload: dict, title: str) -> str:
     <div class="stats" id="stats"></div>
     <div class="grid">
       <div class="panel"><div id="mapPlot" class="plot"></div></div>
-      <div class="panel"><div id="kdePlot" class="plot"></div></div>
+      <div class="panel"><div id="profilePlot" class="plot"></div></div>
     </div>
-    <div class="note">Rendered with GeoPandas continent/state overlays alongside Gaussian Kernel Density Estimation (KDE).</div>
+    <div class="note">Raster heatmap alongside Zonal Latitude Profile (showing mean & 5th–95th percentile spread by latitude).</div>
   </div>
   <script>
     const DATA = {payload_json};
@@ -323,8 +314,7 @@ def render_html(payload: dict, title: str) -> str:
     const varSelect = document.getElementById("variableSelect");
     const yearSelect = document.getElementById("yearSelect");
     const scaleSelect = document.getElementById("scaleSelect");
-    const kdeXScaleSelect = document.getElementById("kdeXScaleSelect");
-    const kdeYScaleSelect = document.getElementById("kdeYScaleSelect");
+    const profileXScaleSelect = document.getElementById("profileXScaleSelect");
     const statsEl = document.getElementById("stats");
 
     const PALETTE_TURBO = [
@@ -438,59 +428,41 @@ def render_html(payload: dict, title: str) -> str:
         .join("");
     }}
 
-    function computeKDE(values, isLogX = false, gridPoints = 200) {{
-      let validVals = values;
-      if (isLogX) {{
-        validVals = values.filter(v => v > 0);
-      }}
-      if (!validVals.length) return {{ x: [], y: [] }};
+    // Calculates Zonal Mean & Percentiles across longitudes for each latitude band
+    function computeLatProfile(grid, lats) {{
+      const means = [];
+      const p05s = [];
+      const p95s = [];
+      const validLats = [];
 
-      const n = validVals.length;
-      const mean = validVals.reduce((a, b) => a + b, 0) / n;
-      const stdDev = Math.sqrt(validVals.reduce((sq, v) => sq + Math.pow(v - mean, 2), 0) / n);
-      const bandwidth = 1.06 * (stdDev || 1.0) * Math.pow(n, -0.2);
+      for (let i = 0; i < grid.length; i++) {{
+        const row = grid[i];
+        if (!row) continue;
 
-      let xCoords = [];
-      if (isLogX) {{
-        const min = Math.min(...validVals);
-        const max = Math.max(...validVals);
-        const logMin = Math.log10(min);
-        const logMax = Math.log10(max);
-        const logMargin = (logMax - logMin) * 0.05 || 0.1;
-        const startLog = logMin - logMargin;
-        const endLog = logMax + logMargin;
-        const stepLog = (endLog - startLog) / (gridPoints - 1);
+        const vals = row.filter(v => v !== null && !isNaN(v));
+        if (vals.length === 0) continue;
 
-        xCoords = Array.from({{ length: gridPoints }}, (_, i) => Math.pow(10, startLog + i * stepLog));
-      }} else {{
-        const min = Math.min(...validVals);
-        const max = Math.max(...validVals);
-        const margin = (max - min) * 0.1 || 1.0;
-        const xMin = min - margin;
-        const xMax = max + margin;
-        const step = (xMax - xMin) / (gridPoints - 1);
+        vals.sort((a, b) => a - b);
+        const sum = vals.reduce((a, b) => a + b, 0);
+        const mean = sum / vals.length;
 
-        xCoords = Array.from({{ length: gridPoints }}, (_, i) => xMin + i * step);
+        const p05Idx = Math.floor(vals.length * 0.05);
+        const p95Idx = Math.min(vals.length - 1, Math.floor(vals.length * 0.95));
+
+        means.push(mean);
+        p05s.push(vals[p05Idx]);
+        p95s.push(vals[p95Idx]);
+        validLats.push(lats[i]);
       }}
 
-      const yCoords = xCoords.map(x => {{
-        let sum = 0;
-        for (let i = 0; i < n; i++) {{
-          const u = (x - validVals[i]) / bandwidth;
-          sum += Math.exp(-0.5 * u * u);
-        }}
-        return sum / (n * bandwidth * Math.sqrt(2 * Math.PI));
-      }});
-
-      return {{ x: xCoords, y: yCoords }};
+      return {{ lats: validLats, means, p05s, p95s }};
     }}
 
     function updatePlots() {{
       const variable = varSelect.value;
       const year = yearSelect.value;
       const scaleType = scaleSelect.value;
-      const kdeXScale = kdeXScaleSelect.value;
-      const kdeYScale = kdeYScaleSelect.value;
+      const profileXScale = profileXScaleSelect.value;
 
       const spec = DATA.variables[variable];
       const block = spec.series[year];
@@ -502,10 +474,16 @@ def render_html(payload: dict, title: str) -> str:
       const minVal = spec.range.min;
       const maxVal = spec.range.max;
 
+      // Extract precise latitude limits to align both Y-axes
+      const latMin = Math.min(...spec.lat);
+      const latMax = Math.max(...spec.lat);
+      const latPad = (latMax - latMin) * 0.02 || 1.0;
+      const latRange = [latMin - latPad, latMax + latPad];
+
       const customColorscale = generateColorscale(scaleType, minVal, maxVal, flatValues);
       const titleSuffix = scaleType === "log" ? " (Log Colorscale)" : " (Linear Colorscale)";
 
-      // Heatmap
+      // 1. Heatmap Trace
       const mapTrace = {{
         type: "heatmap",
         z: rawGrid,
@@ -519,7 +497,7 @@ def render_html(payload: dict, title: str) -> str:
         hoverongaps: false
       }};
 
-      // Overlay GeoPandas continent/state boundary line trace
+      // 2. GeoPandas Boundary Trace
       const geoLines = DATA.meta.geo_lines || {{ lon: [], lat: [] }};
       const outlineTrace = {{
         type: "scatter",
@@ -534,49 +512,55 @@ def render_html(payload: dict, title: str) -> str:
       const mapLayout = {{
         title: `${{variable}} raster (${{year}})${{titleSuffix}}`,
         margin: {{ l: 40, r: 10, t: 42, b: 40 }},
-        xaxis: {{ title: "Longitude", scaleanchor: "y" }},
-        yaxis: {{ title: "Latitude" }},
+        xaxis: {{ title: "Longitude" }},
+        yaxis: {{ title: "Latitude", range: latRange }},
         template: "plotly_white"
       }};
 
       Plotly.react("mapPlot", [mapTrace, outlineTrace], mapLayout, {{ responsive: true, displaylogo: false }});
 
-      // KDE Density Plot
-      const kdeData = computeKDE(flatValues, kdeXScale === "log");
+      // 3. Latitude Profile Traces (Shaded P05-P95 Band + Zonal Mean Line)
+      const profile = computeLatProfile(rawGrid, spec.lat);
 
-      let yPlot = kdeData.y;
-      if (kdeYScale === "log") {{
-        const maxY = Math.max(...yPlot);
-        const minYFloor = maxY * 1e-6;
-        yPlot = yPlot.map(y => (y > minYFloor ? y : minYFloor));
-      }}
-
-      const kdeTrace = {{
+      const bandTrace = {{
         type: "scatter",
         mode: "lines",
-        x: kdeData.x,
-        y: yPlot,
-        fill: kdeYScale === "log" ? "none" : "tozeroy",
-        fillcolor: "rgba(21, 101, 192, 0.25)",
-        line: {{ color: "#1565c0", width: 2 }},
-        name: "KDE Density"
+        x: [...profile.p05s, ...profile.p95s.slice().reverse()],
+        y: [...profile.lats, ...profile.lats.slice().reverse()],
+        fill: "toself",
+        fillcolor: "rgba(21, 101, 192, 0.18)",
+        line: {{ color: "transparent" }},
+        name: "5th-95th Percentile Range",
+        hoverinfo: "skip"
       }};
 
-      const kdeLayout = {{
-        title: `${{variable}} Density Distribution (${{year}})`,
-        margin: {{ l: 50, r: 14, t: 42, b: 48 }},
+      const meanTrace = {{
+        type: "scatter",
+        mode: "lines",
+        x: profile.means,
+        y: profile.lats,
+        line: {{ color: "#1565c0", width: 2.5 }},
+        name: "Zonal Mean",
+        hovertemplate: "Lat: %{{y:.2f}}<br>Mean " + variable + ": %{{x:.3f}}<extra></extra>"
+      }};
+
+      const profileLayout = {{
+        title: `${{variable}} vs Latitude (${{year}})`,
+        margin: {{ l: 45, r: 14, t: 42, b: 40 }},
         xaxis: {{ 
           title: variable, 
-          type: kdeXScale === "log" ? "log" : "linear" 
+          type: profileXScale === "log" ? "log" : "linear" 
         }},
         yaxis: {{ 
-          title: "Density", 
-          type: kdeYScale === "log" ? "log" : "linear" 
+          title: "Latitude", 
+          range: latRange 
         }},
+        showlegend: true,
+        legend: {{ x: 0.05, y: 0.98, bgcolor: "rgba(255,255,255,0.7)" }},
         template: "plotly_white"
       }};
 
-      Plotly.react("kdePlot", [kdeTrace], kdeLayout, {{ responsive: true, displaylogo: false }});
+      Plotly.react("profilePlot", [bandTrace, meanTrace], profileLayout, {{ responsive: true, displaylogo: false }});
     }}
 
     const variables = DATA.meta.variables;
@@ -594,8 +578,7 @@ def render_html(payload: dict, title: str) -> str:
 
     yearSelect.addEventListener("change", updatePlots);
     scaleSelect.addEventListener("change", updatePlots);
-    kdeXScaleSelect.addEventListener("change", updatePlots);
-    kdeYScaleSelect.addEventListener("change", updatePlots);
+    profileXScaleSelect.addEventListener("change", updatePlots);
     updatePlots();
   </script>
 </body>
@@ -605,7 +588,7 @@ def render_html(payload: dict, title: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build an interactive pixel-raster HTML dashboard with GeoPandas boundaries and KDE."
+        description="Build an interactive pixel-raster HTML dashboard with GeoPandas boundaries and Latitude Profile Plot."
     )
     parser.add_argument(
         "--input",
