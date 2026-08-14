@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from pathlib import Path
 
@@ -64,11 +65,17 @@ def load_geo_boundaries() -> dict[str, list[float | None]]:
     return {"lon": lons, "lat": lats}
 
 
-def build_payload(ds: xr.Dataset) -> dict:
+def build_payload(ds: xr.Dataset, input_path: Path) -> dict:
     payload: dict[str, dict] = {"variables": {}, "meta": {}}
 
     years = [time_to_label(t) for t in ds["time"].values]
     payload["meta"]["years"] = years
+
+    # --- EMBED NETCDF FILE AS BASE64 FOR CLIENT-SIDE DOWNLOAD ---
+    print(f"Encoding '{input_path.name}' for embedded download...")
+    nc_bytes = input_path.read_bytes()
+    payload["meta"]["nc_base64"] = base64.b64encode(nc_bytes).decode("ascii")
+    payload["meta"]["nc_filename"] = input_path.name
 
     print("Extracting geographic boundaries using GeoPandas...")
     payload["meta"]["geo_lines"] = load_geo_boundaries()
@@ -195,6 +202,7 @@ def render_html(payload: dict, title: str) -> str:
     .controls {{
       display: flex;
       flex-wrap: wrap;
+      align-items: flex-end;
       gap: 10px;
       background: var(--panel);
       border: 1px solid var(--border);
@@ -204,7 +212,7 @@ def render_html(payload: dict, title: str) -> str:
     .control {{
       display: grid;
       gap: 4px;
-      min-width: 160px;
+      min-width: 150px;
     }}
     label {{
       font-size: 0.8rem;
@@ -220,6 +228,29 @@ def render_html(payload: dict, title: str) -> str:
       font-size: 0.95rem;
       background: #fff;
       color: var(--ink);
+    }}
+    .btn {{
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #ffffff;
+      border-radius: 9px;
+      padding: 8px 12px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+      height: 38px;
+    }}
+    .btn:hover {{
+      background: #0d47a1;
+    }}
+    .btn-secondary {{
+      background: #ffffff;
+      color: var(--ink);
+      border-color: var(--border);
+    }}
+    .btn-secondary:hover {{
+      background: #eef3f9;
     }}
     .stats {{
       display: grid;
@@ -299,6 +330,14 @@ def render_html(payload: dict, title: str) -> str:
             <option value="log">Logarithmic</option>
           </select>
         </div>
+        <div class="control">
+          <label>Data Export</label>
+          <button id="downloadNcBtn" class="btn">Download Full (.nc)</button>
+        </div>
+        <div class="control">
+          <label>&nbsp;</label>
+          <button id="downloadCsvBtn" class="btn btn-secondary">Download Slice (.csv)</button>
+        </div>
       </div>
     </div>
     <div class="stats" id="stats"></div>
@@ -307,6 +346,9 @@ def render_html(payload: dict, title: str) -> str:
       <div class="panel"><div id="profilePlot" class="plot"></div></div>
     </div>
     <div class="note">Raster heatmap alongside Zonal Latitude Profile (showing mean & 5th–95th percentile spread by latitude).</div>
+<div class="note">The underlying dataset is derived from CAMS Greenhouse Gas Reanalysis (Agustí-Panareda et al., 2023), the EDGAR v8.0 emissions database (Crippa et al., 2024), and global GOSIF solar-induced chlorophyll fluorescence data (Li & Xiao, 2019).</div>  
+    <div class="note">Code and additional analyisis can be found at <a href="https://github.com/ghg-ai-lab-complexity72-dev/complexity72_2026" target="_blank">https://github.com/cams-gas-reanalysis</a>.</div>
+
   </div>
   <script>
     const DATA = {payload_json};
@@ -316,6 +358,8 @@ def render_html(payload: dict, title: str) -> str:
     const scaleSelect = document.getElementById("scaleSelect");
     const profileXScaleSelect = document.getElementById("profileXScaleSelect");
     const statsEl = document.getElementById("stats");
+    const downloadNcBtn = document.getElementById("downloadNcBtn");
+    const downloadCsvBtn = document.getElementById("downloadCsvBtn");
 
     const PALETTE_TURBO = [
       [0.188, 0.071, 0.231],
@@ -428,7 +472,6 @@ def render_html(payload: dict, title: str) -> str:
         .join("");
     }}
 
-    // Calculates Zonal Mean & Percentiles across longitudes for each latitude band
     function computeLatProfile(grid, lats) {{
       const means = [];
       const p05s = [];
@@ -474,7 +517,6 @@ def render_html(payload: dict, title: str) -> str:
       const minVal = spec.range.min;
       const maxVal = spec.range.max;
 
-      // Extract precise latitude limits to align both Y-axes
       const latMin = Math.min(...spec.lat);
       const latMax = Math.max(...spec.lat);
       const latPad = (latMax - latMin) * 0.02 || 1.0;
@@ -483,7 +525,6 @@ def render_html(payload: dict, title: str) -> str:
       const customColorscale = generateColorscale(scaleType, minVal, maxVal, flatValues);
       const titleSuffix = scaleType === "log" ? " (Log Colorscale)" : " (Linear Colorscale)";
 
-      // 1. Heatmap Trace
       const mapTrace = {{
         type: "heatmap",
         z: rawGrid,
@@ -497,7 +538,6 @@ def render_html(payload: dict, title: str) -> str:
         hoverongaps: false
       }};
 
-      // 2. GeoPandas Boundary Trace
       const geoLines = DATA.meta.geo_lines || {{ lon: [], lat: [] }};
       const outlineTrace = {{
         type: "scatter",
@@ -519,7 +559,6 @@ def render_html(payload: dict, title: str) -> str:
 
       Plotly.react("mapPlot", [mapTrace, outlineTrace], mapLayout, {{ responsive: true, displaylogo: false }});
 
-      // 3. Latitude Profile Traces (Shaded P05-P95 Band + Zonal Mean Line)
       const profile = computeLatProfile(rawGrid, spec.lat);
 
       const bandTrace = {{
@@ -563,6 +602,62 @@ def render_html(payload: dict, title: str) -> str:
       Plotly.react("profilePlot", [bandTrace, meanTrace], profileLayout, {{ responsive: true, displaylogo: false }});
     }}
 
+    // --- DOWNLOAD FULL NETCDF (.nc) FILE ---
+    downloadNcBtn.addEventListener("click", () => {{
+      const b64 = DATA.meta.nc_base64;
+      const fileName = DATA.meta.nc_filename || "unified_annual_carbon_dataset_2015_2024.nc";
+      
+      const binaryString = atob(b64);
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {{
+        bytes[i] = binaryString.charCodeAt(i);
+      }}
+
+      const blob = new Blob([bytes.buffer], {{ type: "application/x-netcdf" }});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }});
+
+    // --- DOWNLOAD ACTIVE SLICE AS CSV (.csv) ---
+    downloadCsvBtn.addEventListener("click", () => {{
+      const variable = varSelect.value;
+      const year = yearSelect.value;
+      const spec = DATA.variables[variable];
+      const grid = spec.series[year].grid;
+
+      let csv = `latitude,longitude,${{variable}}\n`;
+
+      for (let i = 0; i < spec.lat.length; i++) {{
+        const lat = spec.lat[i];
+        const row = grid[i];
+        if (!row) continue;
+        for (let j = 0; j < spec.lon.length; j++) {{
+          const lon = spec.lon[j];
+          const val = row[j];
+          if (val !== null && val !== undefined && !isNaN(val)) {{
+            csv += `${{lat}},${{lon}},${{val}}\n`;
+          }}
+        }}
+      }}
+
+      const blob = new Blob([csv], {{ type: "text/csv;charset=utf-8;" }});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${{variable}}_${{year}}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }});
+
     const variables = DATA.meta.variables;
     populateSelect(varSelect, variables);
     const firstVar = variables[0];
@@ -588,7 +683,7 @@ def render_html(payload: dict, title: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build an interactive pixel-raster HTML dashboard with GeoPandas boundaries and Latitude Profile Plot."
+        description="Build an interactive pixel-raster HTML dashboard with GeoPandas boundaries and NetCDF/CSV dataset downloads."
     )
     parser.add_argument(
         "--input",
@@ -605,7 +700,7 @@ def main() -> None:
     args = parser.parse_args()
 
     ds = xr.open_dataset(args.input)
-    payload = build_payload(ds)
+    payload = build_payload(ds, args.input)
 
     if not payload["variables"]:
         raise ValueError("No time-dependent variables with lat/lon dimensions were found.")
