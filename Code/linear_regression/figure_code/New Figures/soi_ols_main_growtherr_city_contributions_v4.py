@@ -1,17 +1,36 @@
 #!/usr/bin/env python3
 """
-Per-LAND-cell regression of the RAW CO2 growth rate on a global lagged annual SOI index and
-gridded emission, with emission standardized per cell and ocean cells masked out.
+Per-LAND-cell regression of the CO2 growth rate on two drivers, with a switch
+between the two predictor sets used in the paper.
 
-Require in the same directory:
-  - unified_annual_carbon_dataset_2015_2024.nc 
-  - SOI.txt 
+    MODE = 0  ->  SOI model      (DSS): growth ~ b0 + bE*E_z    + bSOI*SOI_z
+    MODE = 1  ->  GOSIF model    (DSb): growth ~ b0 + bdE*dE_z  + bdSIF*dSIF_z
 
-Outputs:
-  outputs/soi_main_obs_pred_resid.png: Fig 3 of Main
-  outputs/soi_variants.png: Fig 1 of Supplementary Information
-  outputs/soi_beta_r2_2x2.png: Fig 2 of Supplementary Information
-  outputs/soi_city_contribution_3x3.png: Fig 4 of Main updated
+NOTE on MODE 1: following the paper, the GOSIF specification uses the
+YEAR-TO-YEAR DIFFERENCES of the surface drivers (delta_emission, delta_gosif),
+not their absolute values. MODE 0 uses the absolute emission field together
+with the global lagged SOI index. The switch therefore changes both the second
+predictor AND whether the drivers are differenced.
+
+Required in the same directory:
+  - unified_annual_carbon_dataset_2015_2024.nc
+  - SOI.txt                                   (only needed when MODE = 0)
+
+Outputs (all figures vector PDF; beta maps also written as NetCDF):
+
+  MODE = 0 (SOI)
+    outputs/soi_main_obs_pred_resid.pdf        Fig 3 of Main
+    outputs/soi_variants.pdf                   Fig 1 of Supplementary
+    outputs/soi_beta_r2_2x2.pdf                Fig 2 of Supplementary
+    outputs/soi_city_contribution_4x3.pdf      Fig 4 of Main, updated
+    outputs/soi_beta_maps.nc                   beta0, bE, bSOI, R2 as NetCDF
+
+  MODE = 1 (GOSIF)
+    outputs/delta_sif_main_obs_pred_resid.pdf  Fig 3 of Supplementary
+    outputs/delta_sif_variants.pdf             Fig 4 of Supplementary
+    outputs/delta_sif_beta_r2_2x2.pdf          Fig 5 of Supplementary
+    outputs/delta_sif_city_contribution_4x3.pdf Fig 6 of Supplementary
+    outputs/delta_sif_beta_maps.nc             beta0, bdE, bdSIF, R2 as NetCDF
 """
 
 import re
@@ -46,36 +65,45 @@ if HAS_CARTOPY:
         print("note: coastlines offline; maps drawn without them")
 
 
-# ----------------------------- CONFIG ------------------------------------
+# ============================== CONFIG ===================================
+
+# -------------------------------------------------------------------------
+#  MODE = 0 : use SOI   (DSS) as second predictor, absolute emission
+#  MODE = 1 : use GOSIF (DSb) as second predictor, differenced drivers
+# -------------------------------------------------------------------------
+MODE = 0
+# -------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
 
-INPUT_FILE = BASE_DIR / "../Input/unified_annual_carbon_dataset_2015_2024.nc"
-SOI_FILE   = BASE_DIR / "../Input/SOI.txt"
+INPUT_FILE = BASE_DIR.parent / "Input" / "unified_annual_carbon_dataset_2015_2024.nc"
+SOI_FILE   = BASE_DIR.parent / "Input" / "SOI.txt"
 
-OUTDIR = BASE_DIR / "../Output"
-OUTDIR.mkdir(parents=True, exist_ok=True)
+FIGDIR = BASE_DIR.parent / "Figures_and_maps"
+NCDIR  = BASE_DIR.parent / "Output"
+FIGDIR.mkdir(parents=True, exist_ok=True)
+NCDIR.mkdir(parents=True, exist_ok=True)
 
-#YEARS = [2016, 2018, 2020, 2022, 2024]
-YEARS = [2015, 2017, 2019, 2021, 2023]
+FIG_EXT = "pdf"          # vector output
+SAVE_NETCDF = True       # also write beta maps as NetCDF
+
+YEARS = [2016, 2018, 2020, 2022, 2024]
+#YEARS = [2015, 2017, 2019, 2021, 2023]
 
 SOI_LAG_MONTHS = 7
 MIN_OBS = 6
 LAMBDAS = np.array([0.0, 0.1, 0.3, 1.0, 3.0, 10.0])
 
+SIF_VAR = "gosif"
+DELTA_SIF_VAR = "delta_gosif"
+
 # Visual controls
 YEAR_LABEL_X = -0.13
 MAP_YEAR_FONTSIZE = 14
 
-BETA0_CMAP = "viridis"    # beta0 heatmap, as in the reference beta-map script
-BETA_CMAP = "RdBu_r"      # shared diverging heatmap for betaSOI and betaE
+BETA0_CMAP = "viridis"    # beta0 heatmap
+BETA_CMAP = "RdBu_r"      # shared diverging heatmap for the two driver betas
 R2_CMAP = "viridis"       # separate heatmap for R2
-
-# Titles for the beta/R2 heatmaps, matching the reference style
-BETA0_TITLE = r"$\beta_0$ (ppm/yr): local baseline growth"
-BETA_SOI_TITLE = r"$\beta_{SOI}$ (ppm/yr per 1 SD SOI): ENSO sensitivity"
-BETA_E_TITLE = r"$\beta_E$ (ppm/yr per 1 SD emission): emission sensitivity"
-R2_TITLE = r"$R^2$"
 
 plt.rcParams.update({
     "font.size": 12,
@@ -83,10 +111,12 @@ plt.rcParams.update({
     "xtick.labelsize": 10,
     "ytick.labelsize": 10,
     "legend.fontsize": 11,
+    "pdf.fonttype": 42,   # editable text in vector output
+    "ps.fonttype": 42,
 })
 
-# City list.
-# Congo was removed; Tokyo is kept once. Australian Outback is added to complete the 3x3 grid.
+# City list: 4 rows x 3 columns.
+# Row 4 added: Delhi, Doha, New York.
 CITIES = [
     ("Beijing, China",       39.9, 116.4,  "industrialized"),
     ("Ruhr Valley, Germany", 51.4,   7.2,  "industrialized"),
@@ -95,24 +125,72 @@ CITIES = [
     ("Amazon, Brazil",       -3.5, -62.0,  "forest"),
     ("Borneo, Indonesia",    -1.0, 113.5,  "forest"),
     ("Patagonia, Argentina", -45.0, -70.0, "steppe"),
-    ("Siberia, Russia",       62.0, 100.0,  "boreal"),
-    ("Australian Outback",   -25.0, 133.0,  "desert"),
+    ("Siberia, Russia",       62.0, 100.0, "boreal"),
+    ("Australian Outback",   -25.0, 133.0, "desert"),
+    ("Delhi, India",          28.6,  77.2, "industrialized"),
+    ("Doha, Qatar",           25.3,  51.5, "arid / industrialized"),
+    ("New York, USA",         40.7, -74.0, "industrialized"),
 ]
 
-print("INPUT_FILE:", INPUT_FILE)
-print("INPUT exists?", INPUT_FILE.exists())
-print("SOI_FILE:", SOI_FILE)
-print("SOI exists?", SOI_FILE.exists())
-print("OUTDIR:", OUTDIR)
+print(f"MODE = {MODE}  ->  " + ("SOI (DSS), absolute emission"
+                                if MODE == 0 else
+                                "GOSIF (DSb), differenced drivers"))
+print("INPUT_FILE:", INPUT_FILE, "| exists?", INPUT_FILE.exists())
+if MODE == 0:
+    print("SOI_FILE:", SOI_FILE, "| exists?", SOI_FILE.exists())
+print("FIGDIR:", FIGDIR, "| NCDIR:", NCDIR)
 
 if not INPUT_FILE.exists():
     raise FileNotFoundError(f"NetCDF file not found: {INPUT_FILE}")
+if MODE == 0 and not SOI_FILE.exists():
+    raise FileNotFoundError(f"SOI file not found: {SOI_FILE} (needed for MODE=0)")
+if MODE not in (0, 1):
+    raise ValueError("MODE must be 0 (SOI) or 1 (GOSIF)")
 
-if not SOI_FILE.exists():
-    raise FileNotFoundError(f"SOI file not found: {SOI_FILE}")
 
-# -------------------------------------------------------------------------
+# --------------------- mode-dependent labels / names ---------------------
 
+if MODE == 0:
+    PREFIX = "soi"
+    P1_KEY, P2_KEY = "bE", "bSOI"                    # NetCDF variable names
+    P1_MATH = r"$\beta_E\,E_z$"
+    P2_MATH = r"$\beta_{SOI}\,SOI_z$"
+    P1_TITLE = r"$\beta_E$ (ppm/yr per 1 SD emission): emission sensitivity"
+    P2_TITLE = r"$\beta_{SOI}$ (ppm/yr per 1 SD SOI): ENSO sensitivity"
+    P1_SHORT, P2_SHORT = r"\beta_E", r"\beta_{SOI}"
+    MAIN_PRED_LABEL = r"Predicted $\Delta CO_2$ (ppm/yr): OLS (DSe + DSs)"
+    VAR2_LABEL = r"Predicted $\Delta CO_2$ (ppm/yr): Ridge (DSe + DSs)"
+    VAR3_LABEL = r"Predicted $\Delta CO_2$ (ppm/yr): Ridge ($\Delta$DSe + DSs)"
+    BAR_COLORS = ["tab:orange", "tab:blue"]
+else:
+    PREFIX = "delta_sif"
+    P1_KEY, P2_KEY = "bdE", "bdSIF"
+    P1_MATH = r"$\beta_{\Delta E}\,\Delta E_z$"
+    P2_MATH = r"$\beta_{\Delta SIF}\,\Delta SIF_z$"
+    P1_TITLE = (r"$\beta_{\Delta E}$ (ppm/yr per 1 SD $\Delta$emission): "
+                r"emission-change sensitivity")
+    P2_TITLE = (r"$\beta_{\Delta SIF}$ (ppm/yr per 1 SD $\Delta$SIF): "
+                r"SIF-change sensitivity")
+    P1_SHORT, P2_SHORT = r"\beta_{\Delta E}", r"\beta_{\Delta SIF}"
+    MAIN_PRED_LABEL = (r"Predicted $\Delta CO_2$ (ppm/yr): "
+                       r"OLS ($\Delta$DSe + $\Delta$DSb)")
+    VAR2_LABEL = (r"Predicted $\Delta CO_2$ (ppm/yr): "
+                  r"Ridge ($\Delta$DSe + $\Delta$DSb)")
+    VAR3_LABEL = r"Predicted $\Delta CO_2$ (ppm/yr): OLS (DSe + DSb)"
+    BAR_COLORS = ["tab:orange", "tab:green"]
+
+BETA0_TITLE = r"$\beta_0$ (ppm/yr): local baseline growth"
+R2_TITLE = r"$R^2$"
+
+
+def outpath(stem, ext=None):
+    """Figures go to Figures_and_maps/, derived NetCDF to Output/."""
+    ext = ext or FIG_EXT
+    folder = NCDIR if ext == "nc" else FIGDIR
+    return folder / f"{PREFIX}_{stem}.{ext}"
+
+
+# =========================== HELPERS =====================================
 
 def read_standardized_soi(path):
     text = Path(path).read_text(errors="ignore")
@@ -189,9 +267,38 @@ def zscore_time(a):
     return (a - mu) / np.where(sd > 0, sd, np.nan)
 
 
-# ----------------------------- LOAD DATA ---------------------------------
+def finite_percentile(a, q, fallback=np.nan):
+    vals = a[np.isfinite(a)]
+    if vals.size == 0:
+        return fallback
+    return np.nanpercentile(vals, q)
+
+
+def sym_limits(a, pct=96):
+    vals = a[np.isfinite(a)]
+    if vals.size == 0:
+        return -1.0, 1.0
+    lim = np.nanpercentile(np.abs(vals), pct)
+    if not np.isfinite(lim) or lim == 0:
+        return -1.0, 1.0
+    return -lim, lim
+
+
+def fmt_coord(latv, lonv):
+    """'39.9N, 116.4E' style label for the subplot titles."""
+    ns = "N" if latv >= 0 else "S"
+    ew = "E" if lonv >= 0 else "W"
+    return f"{abs(latv):.1f}\u00b0{ns}, {abs(lonv):.1f}\u00b0{ew}"
+
+
+# ========================== LOAD DATA ====================================
 
 ds = xr.open_dataset(INPUT_FILE)
+
+for name in ["growth_rate", "emission", SIF_VAR]:
+    if name not in ds:
+        available = ", ".join(list(ds.data_vars))
+        raise KeyError(f"Variable {name!r} not found. Available: {available}")
 
 lat = ds["lat"].values
 lon = ds["lon"].values
@@ -207,52 +314,64 @@ T, nlat, nlon = ds["growth_rate"].shape
 
 gr = ds["growth_rate"].transpose("time", "lat", "lon").values.astype("float64")
 
-if "growth_err" in ds:
-    growth_err = ds["growth_err"].transpose("time", "lat", "lon").values.astype("float64")
-    print("Using growth_err from NetCDF for observed city error bars.")
-else:
-    growth_err = np.full_like(gr, np.nan)
-    print("WARNING: growth_err not found in NetCDF. City error bars will be omitted.")
-
-Ytarget = gr.copy()
-
 land2d = build_land_mask(lat, lon)
 land3d = np.broadcast_to(land2d[None], (T, nlat, nlon))
-
 print(f"land cells: {int(land2d.sum())} ({100 * land2d.mean():.1f}%)")
 
+Ytarget = np.where(land3d, gr, np.nan)
+
+if "growth_err" in ds:
+    growth_err = ds["growth_err"].transpose("time", "lat", "lon").values.astype("float64")
+    Yerr = np.where(land3d, growth_err, np.nan)
+    print("Using growth_err from NetCDF for observed city error bars.")
+else:
+    Yerr = np.full_like(Ytarget, np.nan)
+    print("WARNING: growth_err not found. City error bars omitted.")
+
+# --- absolute driver fields ---
 emission_raw = ds["emission"].transpose("time", "lat", "lon").values.astype("float64")
+sif_raw = ds[SIF_VAR].transpose("time", "lat", "lon").values.astype("float64")
 
-emission_z = zscore_time(emission_raw)
+E_z = np.where(land3d, zscore_time(emission_raw), np.nan)
+SIF_z = np.where(land3d, zscore_time(sif_raw), np.nan)
 
-delta_emission = np.full_like(emission_raw, np.nan)
-delta_emission[1:] = emission_raw[1:] - emission_raw[:-1]
-delta_emission_z = zscore_time(delta_emission)
+# --- differenced driver fields ---
+if "delta_emission" in ds:
+    dE_raw = ds["delta_emission"].transpose("time", "lat", "lon").values.astype("float64")
+    print("Using 'delta_emission' from NetCDF.")
+else:
+    dE_raw = np.full_like(emission_raw, np.nan)
+    dE_raw[1:] = emission_raw[1:] - emission_raw[:-1]
+    print("'delta_emission' not found; computed first differences.")
 
-# Apply land mask: ocean -> NaN so it is excluded from fitting and display.
-Ytarget = np.where(land3d, Ytarget, np.nan)
-Yerr = np.where(land3d, growth_err, np.nan)
-emission_z = np.where(land3d, emission_z, np.nan)
-delta_emission_z = np.where(land3d, delta_emission_z, np.nan)
+if DELTA_SIF_VAR in ds:
+    dSIF_raw = ds[DELTA_SIF_VAR].transpose("time", "lat", "lon").values.astype("float64")
+    print(f"Using {DELTA_SIF_VAR!r} from NetCDF.")
+else:
+    dSIF_raw = np.full_like(sif_raw, np.nan)
+    dSIF_raw[1:] = sif_raw[1:] - sif_raw[:-1]
+    print(f"{DELTA_SIF_VAR!r} not found; computed first differences.")
 
-# SOI predictor.
-soi_ann = annual_lag_soi(read_standardized_soi(SOI_FILE))
-soi_raw = np.array([soi_ann.loc[int(y)] for y in ds_years], dtype="float64")
-soi_z1d = (soi_raw - np.nanmean(soi_raw)) / np.nanstd(soi_raw)
-soi_grid = np.broadcast_to(soi_z1d[:, None, None], (T, nlat, nlon)).copy()
+dE_z = np.where(land3d, zscore_time(dE_raw), np.nan)
+dSIF_z = np.where(land3d, zscore_time(dSIF_raw), np.nan)
 
-print("SOI lag-7 annual z:", dict(zip(ds_years.tolist(), np.round(soi_z1d, 2).tolist())))
+# --- SOI predictor (MODE 0 only) ---
+soi_z1d = None
+if MODE == 0:
+    soi_ann = annual_lag_soi(read_standardized_soi(SOI_FILE))
+    soi_raw = np.array([soi_ann.loc[int(y)] for y in ds_years], dtype="float64")
+    soi_z1d = (soi_raw - np.nanmean(soi_raw)) / np.nanstd(soi_raw)
+    soi_grid = np.broadcast_to(soi_z1d[:, None, None], (T, nlat, nlon)).copy()
+    print("SOI lag-7 annual z:",
+          dict(zip(ds_years.tolist(), np.round(soi_z1d, 2).tolist())))
 
 
-# ----------------------------- REGRESSION --------------------------------
+# ========================== REGRESSION ===================================
 
 def fit(Y, X1, X2, lambdas, min_obs=MIN_OBS):
     """
-    X1 = emission or delta_emission predictor.
-    X2 = SOI predictor.
-
-    Returns:
-        beta0, b1, b2, r2, pred
+    X1 = first driver predictor (emission or delta_emission).
+    X2 = second driver predictor (SOI or delta_SIF).
 
     Ridge penalty is applied to b1 and b2 only, not to beta0.
     If lambdas = [0.0], this is OLS.
@@ -307,23 +426,17 @@ def fit(Y, X1, X2, lambdas, min_obs=MIN_OBS):
             denom = 1.0 - lev
             good = Vi & (denom > 1e-6)
 
-            loo = np.where(
-                good,
-                (Yi - yhat) / np.where(good, denom, 1.0),
-                0.0,
-            )
-
-            crit = np.where(good, loo ** 2, 0.0).sum(axis=0) / np.maximum(good.sum(axis=0), 1)
+            loo = np.where(good, (Yi - yhat) / np.where(good, denom, 1.0), 0.0)
+            crit = (np.where(good, loo ** 2, 0.0).sum(axis=0)
+                    / np.maximum(good.sum(axis=0), 1))
 
             ss_res = (np.where(Vi, Yi - yhat, 0.0) ** 2).sum(axis=0)
             r2_candidate = 1.0 - ss_res / np.where(ss_tot[idx] > 0, ss_tot[idx], np.nan)
 
             improve = crit < best
             best = np.where(improve, crit, best)
-
             for c in range(3):
                 best_beta[:, c] = np.where(improve, b[:, c], best_beta[:, c])
-
             best_r2 = np.where(improve, r2_candidate, best_r2)
 
         beta[idx] = best_beta
@@ -349,28 +462,92 @@ def fit(Y, X1, X2, lambdas, min_obs=MIN_OBS):
     }
 
 
-# MAIN = OLS(SOI + emission)
-# VARIANTS = Ridge(SOI + emission) and Ridge(SOI + delta_emission)
-print("fitting OLS:   SOI + emission [main] ...")
-main = fit(Ytarget, emission_z, soi_grid, np.array([0.0]))
+if MODE == 0:
+    # MAIN     = OLS(emission + SOI)
+    # VARIANTS = Ridge(emission + SOI) and Ridge(delta_emission + SOI)
+    P1_MAIN, P2_MAIN = E_z, soi_grid
+    print("fitting OLS:   emission + SOI [main] ...")
+    main = fit(Ytarget, E_z, soi_grid, np.array([0.0]))
+    print("fitting Ridge: emission + SOI [variant] ...")
+    var_a = fit(Ytarget, E_z, soi_grid, LAMBDAS)
+    print("fitting Ridge: delta_emission + SOI [variant] ...")
+    var_b = fit(Ytarget, dE_z, soi_grid, LAMBDAS)
+else:
+    # MAIN     = OLS(delta_emission + delta_SIF)
+    # VARIANTS = Ridge(delta_emission + delta_SIF) and OLS(emission + SIF)
+    P1_MAIN, P2_MAIN = dE_z, dSIF_z
+    print("fitting OLS:   delta_emission + delta_SIF [main] ...")
+    main = fit(Ytarget, dE_z, dSIF_z, np.array([0.0]))
+    print("fitting Ridge: delta_emission + delta_SIF [variant] ...")
+    var_a = fit(Ytarget, dE_z, dSIF_z, LAMBDAS)
+    print("fitting OLS:   emission + SIF [variant] ...")
+    var_b = fit(Ytarget, E_z, SIF_z, np.array([0.0]))
 
-print("fitting Ridge: SOI + emission [variant] ...")
-ridge_emis = fit(Ytarget, emission_z, soi_grid, LAMBDAS)
 
-print("fitting Ridge: SOI + delta_emission [variant] ...")
-ridge_delta = fit(Ytarget, delta_emission_z, soi_grid, LAMBDAS)
+# ======================= EXPORT BETA MAPS AS NetCDF ======================
+
+def save_beta_netcdf(res, path):
+    """Write beta0, the two driver betas and R2 as a CF-ish NetCDF file."""
+    out = xr.Dataset(
+        {
+            "beta0": (("lat", "lon"), res["beta0"]),
+            P1_KEY:  (("lat", "lon"), res["b1"]),
+            P2_KEY:  (("lat", "lon"), res["b2"]),
+            "r2":    (("lat", "lon"), res["r2"]),
+        },
+        coords={"lat": lat, "lon": lon},
+    )
+    out["beta0"].attrs = {"long_name": "local baseline growth rate",
+                          "units": "ppm yr-1"}
+    out[P1_KEY].attrs = {
+        "long_name": ("emission sensitivity" if MODE == 0
+                      else "emission-change sensitivity"),
+        "units": ("ppm yr-1 per 1 SD emission" if MODE == 0
+                  else "ppm yr-1 per 1 SD delta-emission")}
+    out[P2_KEY].attrs = {
+        "long_name": ("ENSO (SOI) sensitivity" if MODE == 0
+                      else "SIF-change sensitivity"),
+        "units": ("ppm yr-1 per 1 SD SOI" if MODE == 0
+                  else "ppm yr-1 per 1 SD delta-SIF")}
+    out["r2"].attrs = {"long_name": "coefficient of determination (in-sample)",
+                       "units": "1"}
+    out["lat"].attrs = {"units": "degrees_north"}
+    out["lon"].attrs = {"units": "degrees_east"}
+    out.attrs = {
+        "title": "Per-grid-cell regression coefficients for CO2 growth rate",
+        "mode": int(MODE),
+        "model": ("growth_rate ~ beta0 + bE*emission_z + bSOI*SOI_z"
+                  if MODE == 0 else
+                  "growth_rate ~ beta0 + bdE*delta_emission_z "
+                  "+ bdSIF*delta_SIF_z"),
+        "estimator": "ordinary least squares (per land grid cell)",
+        "predictors_standardized": "yes (per cell, over time)",
+        "period": f"{int(ds_years.min())}-{int(ds_years.max())}",
+        "source_dataset": INPUT_FILE.name,
+        "note": "Ocean cells are NaN (excluded from the fit).",
+    }
+    out.to_netcdf(path)
+    return out
 
 
-# ----------------------------- MAP HELPERS -------------------------------
+if SAVE_NETCDF:
+    nc_path = outpath("beta_maps", "nc")
+    save_beta_netcdf(main, nc_path)
+    print("saved", nc_path.name)
+
+
+# ========================== MAP HELPERS ==================================
 
 landmask = np.isfinite(main["pred"])
 obs_field = np.where(landmask, Ytarget, np.nan)
 
-vmin = np.nanpercentile(obs_field, 2)
-vmax = np.nanpercentile(obs_field, 98)
+vmin = finite_percentile(obs_field, 2, 0.0)
+vmax = finite_percentile(obs_field, 98, 1.0)
 
 main_resid = obs_field - main["pred"]
-rlim = np.nanpercentile(np.abs(main_resid[np.isfinite(main_resid)]), 96)
+rlim = finite_percentile(np.abs(main_resid[np.isfinite(main_resid)]), 96, 1.0)
+if not np.isfinite(rlim) or rlim == 0:
+    rlim = 1.0
 
 EXTENT = [lon.min(), lon.max(), lat.min(), lat.max()]
 
@@ -379,15 +556,8 @@ def add_map(ax, data, cmap, vmn, vmx):
     cm = plt.get_cmap(cmap).copy()
     cm.set_bad("0.85")
 
-    kwargs = dict(
-        origin="lower",
-        extent=EXTENT,
-        cmap=cm,
-        vmin=vmn,
-        vmax=vmx,
-        aspect="auto",
-    )
-
+    kwargs = dict(origin="lower", extent=EXTENT, cmap=cm,
+                  vmin=vmn, vmax=vmx, aspect="auto")
     if HAS_CARTOPY:
         kwargs["transform"] = ccrs.PlateCarree()
 
@@ -400,44 +570,25 @@ def add_map(ax, data, cmap, vmn, vmx):
             except Exception:
                 pass
         ax.set_global()
-
     return im
 
 
 def add_year_label(ax, yr):
-    ax.text(
-        YEAR_LABEL_X,
-        0.5,
-        str(yr),
-        transform=ax.transAxes,
-        rotation=90,
-        va="center",
-        ha="right",
-        fontsize=MAP_YEAR_FONTSIZE,
-        fontweight="bold",
-        clip_on=False,
-    )
+    ax.text(YEAR_LABEL_X, 0.5, str(yr), transform=ax.transAxes, rotation=90,
+            va="center", ha="right", fontsize=MAP_YEAR_FONTSIZE,
+            fontweight="bold", clip_on=False)
 
 
 def yr_index(yr):
     return int(np.where(ds_years == yr)[0][0])
 
 
-def sym_limits(a, pct=96):
-    vals = a[np.isfinite(a)]
-    if vals.size == 0:
-        return -1.0, 1.0
-    lim = np.nanpercentile(np.abs(vals), pct)
-    return -lim, lim
-
-
 def add_colorbar(fig, im, ax, label=None):
-    cb = fig.colorbar(im, ax=ax, shrink=0.7, pad=0.02)
-    return cb
+    return fig.colorbar(im, ax=ax, shrink=0.7, pad=0.02)
 
 
-# ----------------------------- FIGURE 1 ----------------------------------
-# observed | OLS(SOI + emission) prediction | residual
+# ============================ FIGURE 1 ===================================
+# observed | main OLS prediction | residual
 
 fig = plt.figure(figsize=(15.8, 3.25 * len(YEARS)))
 
@@ -447,35 +598,29 @@ for row, yr in enumerate(YEARS):
     pred = main["pred"][ti]
 
     panels = [
-        (obs, "viridis", vmin, vmax, "Observed $\Delta{CO}2$" + " (ppm/yr)"),
-        (pred, "viridis", vmin, vmax, "Predicted  $\Delta{CO}2$" + " (ppm/yr): LS (DSS + DSE)"),
-        (obs - pred, "PuOr_r", -rlim, rlim, "Residual $\Delta{CO}2$" + " (ppm/yr)"),
+        (obs, "viridis", vmin, vmax, r"Observed $\Delta CO_2$ (ppm/yr)"),
+        (pred, "viridis", vmin, vmax, MAIN_PRED_LABEL),
+        (obs - pred, "PuOr_r", -rlim, rlim, r"Residual $\Delta CO_2$ (ppm/yr)"),
     ]
 
     for col, (data, cmap, lo, hi, cblabel) in enumerate(panels):
-        ax = fig.add_subplot(
-            len(YEARS),
-            3,
-            row * 3 + col + 1,
-            projection=ccrs.PlateCarree() if HAS_CARTOPY else None,
-        )
-
+        ax = fig.add_subplot(len(YEARS), 3, row * 3 + col + 1,
+                             projection=ccrs.PlateCarree() if HAS_CARTOPY else None)
         im = add_map(ax, data, cmap, lo, hi)
         if row == 0:
             ax.set_title(cblabel, fontsize=12, fontweight="bold")
         if col == 0:
             add_year_label(ax, yr)
-
         add_colorbar(fig, im, ax, cblabel)
 
 fig.tight_layout(rect=[0.04, 0, 1, 0.99])
-fig.savefig(OUTDIR / "soi_main_obs_pred_resid.png", dpi=105, bbox_inches="tight")
+fig.savefig(outpath("main_obs_pred_resid"), bbox_inches="tight")
 plt.close(fig)
-print("saved soi_main_obs_pred_resid.png")
+print("saved", outpath("main_obs_pred_resid").name)
 
 
-# ----------------------------- FIGURE 2 ----------------------------------
-# observed | Ridge(SOI + emission) | Ridge(SOI + delta_emission)
+# ============================ FIGURE 2 ===================================
+# observed | variant A | variant B
 
 fig = plt.figure(figsize=(15.8, 3.25 * len(YEARS)))
 
@@ -484,96 +629,75 @@ for row, yr in enumerate(YEARS):
     obs = np.where(landmask[ti], Ytarget[ti], np.nan)
 
     panels = [
-        (obs, "viridis", vmin, vmax, "Observed $\Delta{CO}2$" + " (ppm/yr)"),
-        (ridge_emis["pred"][ti], "viridis", vmin, vmax, "Predicted $\Delta{CO}2$" + " (ppm/yr): Ridge (DSS + DSE)"),
-        (ridge_delta["pred"][ti], "viridis", vmin, vmax, r"Predicted $\Delta{CO}2$" + " (ppm/yr): Ridge (DSS + DS $\Delta_{E}$)"),
+        (obs, "viridis", vmin, vmax, r"Observed $\Delta CO_2$ (ppm/yr)"),
+        (var_a["pred"][ti], "viridis", vmin, vmax, VAR2_LABEL),
+        (var_b["pred"][ti], "viridis", vmin, vmax, VAR3_LABEL),
     ]
 
     for col, (data, cmap, lo, hi, cblabel) in enumerate(panels):
-        ax = fig.add_subplot(
-            len(YEARS),
-            3,
-            row * 3 + col + 1,
-            projection=ccrs.PlateCarree() if HAS_CARTOPY else None,
-        )
-
+        ax = fig.add_subplot(len(YEARS), 3, row * 3 + col + 1,
+                             projection=ccrs.PlateCarree() if HAS_CARTOPY else None)
         im = add_map(ax, data, cmap, lo, hi)
         if row == 0:
             ax.set_title(cblabel, fontsize=12, fontweight="bold")
         if col == 0:
             add_year_label(ax, yr)
-
         add_colorbar(fig, im, ax, cblabel)
 
 fig.tight_layout(rect=[0.04, 0, 1, 0.99])
-fig.savefig(OUTDIR / "soi_variants.png", dpi=105, bbox_inches="tight")
+fig.savefig(outpath("variants"), bbox_inches="tight")
 plt.close(fig)
-print("saved soi_variants.png")
+print("saved", outpath("variants").name)
 
 
-# ----------------------------- FIGURE 3 ----------------------------------
-# beta maps + R2 for MAIN OLS model.
-# Draw all beta maps in the same style as the reference beta-map script:
-#   - beta0: viridis + 2/98 percentile limits
-#   - betaSOI and betaE: RdBu_r + symmetric 96th-percentile limits
-#   - R2 kept as a fourth panel
+# ============================ FIGURE 3 ===================================
+# beta maps + R2 for the MAIN OLS model
 
 b0 = main["beta0"]
-bE = main["b1"]
-bSOI = main["b2"]
+b1m = main["b1"]
+b2m = main["b2"]
 r2m = main["r2"]
 
 b0_finite = b0[np.isfinite(b0)]
 if b0_finite.size == 0:
     b0_vmin, b0_vmax = 0.0, 1.0
 else:
-    # Reference-style robust limits for beta0
     b0_vmin = np.nanpercentile(b0_finite, 2)
     b0_vmax = np.nanpercentile(b0_finite, 98)
 
 specs = [
     (b0, BETA0_TITLE, BETA0_CMAP, b0_vmin, b0_vmax),
-    (bSOI, BETA_SOI_TITLE, BETA_CMAP, *sym_limits(bSOI)),
-    (bE, BETA_E_TITLE, BETA_CMAP, *sym_limits(bE)),
+    (b2m, P2_TITLE, BETA_CMAP, *sym_limits(b2m)),
+    (b1m, P1_TITLE, BETA_CMAP, *sym_limits(b1m)),
     (r2m, R2_TITLE, R2_CMAP, 0.0, 1.0),
 ]
 
 fig = plt.figure(figsize=(14.5, 8.5))
 
 for k, (data, title, cmap, lo, hi) in enumerate(specs):
-    ax = fig.add_subplot(
-        2,
-        2,
-        k + 1,
-        projection=ccrs.PlateCarree() if HAS_CARTOPY else None,
-    )
-
+    ax = fig.add_subplot(2, 2, k + 1,
+                         projection=ccrs.PlateCarree() if HAS_CARTOPY else None)
     im = add_map(ax, data, cmap, lo, hi)
     ax.set_title(title, fontsize=12, fontweight="bold")
     add_colorbar(fig, im, ax, None)
 
 fig.tight_layout()
-fig.savefig(OUTDIR / "soi_beta_r2_2x2.png", dpi=115, bbox_inches="tight")
+fig.savefig(outpath("beta_r2_2x2"), bbox_inches="tight")
 plt.close(fig)
-print("saved soi_beta_r2_2x2.png")
+print("saved", outpath("beta_r2_2x2").name)
 
 
-# ----------------------------- FIGURE 4 ----------------------------------
-# city contribution decomposition for MAIN OLS model.
-# No white beta0 bars are shown.
-# Prediction still includes beta0.
+# ============================ FIGURE 4 ===================================
+# city contribution decomposition, 4 rows x 3 columns.
+# The beta0 contribution is not drawn as a bar, but is included in `pred`.
 
 def nearest_valid(beta0_map, target_lat, target_lon):
     finite = np.isfinite(beta0_map)
-
     LON, LAT = np.meshgrid(lon, lat)
-
     dlon = np.abs(LON - target_lon)
     dlon = np.minimum(dlon, 360 - dlon)
-
     d2 = (LAT - target_lat) ** 2 + dlon ** 2
     d2 = np.where(finite, d2, np.inf)
-
     return np.unravel_index(np.argmin(d2), d2.shape)
 
 
@@ -587,18 +711,13 @@ def global_band(field, latitudes):
     for t in range(field.shape[0]):
         values = field[t]
         valid = np.isfinite(values)
-
         if not np.any(valid):
             continue
-
         weights = np.broadcast_to(lat_weights, values.shape)[valid]
         values_valid = values[valid]
         weight_sum = weights.sum()
-
         mean[t] = (weights * values_valid).sum() / weight_sum
-        sd[t] = np.sqrt(
-            (weights * (values_valid - mean[t]) ** 2).sum() / weight_sum
-        )
+        sd[t] = np.sqrt((weights * (values_valid - mean[t]) ** 2).sum() / weight_sum)
 
     return mean, mean - sd, mean + sd
 
@@ -606,38 +725,19 @@ def global_band(field, latitudes):
 def stacked_signed_bar(ax, x, comps, labels, facecolors, width=0.6):
     pos_base = np.zeros(len(x))
     neg_base = np.zeros(len(x))
-
     handles = []
 
     for comp, label, fc in zip(comps, labels, facecolors):
         comp = np.asarray(comp, dtype=float)
-
         pos = np.where(comp > 0, comp, 0.0)
         neg = np.where(comp < 0, comp, 0.0)
 
-        h_pos = ax.bar(
-            x,
-            pos,
-            bottom=pos_base,
-            width=width,
-            color=fc,
-            label=label,
-            edgecolor="0.3",
-            linewidth=0.6,
-        )
-
-        ax.bar(
-            x,
-            neg,
-            bottom=neg_base,
-            width=width,
-            color=fc,
-            edgecolor="0.3",
-            linewidth=0.6,
-        )
+        h_pos = ax.bar(x, pos, bottom=pos_base, width=width, color=fc,
+                       label=label, edgecolor="0.3", linewidth=0.6)
+        ax.bar(x, neg, bottom=neg_base, width=width, color=fc,
+               edgecolor="0.3", linewidth=0.6)
 
         handles.append(h_pos)
-
         pos_base += pos
         neg_base += neg
 
@@ -648,14 +748,8 @@ n_cities = len(CITIES)
 ncols = 3
 nrows = math.ceil(n_cities / ncols)
 
-fig, axes = plt.subplots(
-    nrows,
-    ncols,
-    figsize=(20, 4.8 * nrows),
-    sharex=True,
-    squeeze=False,
-)
-
+fig, axes = plt.subplots(nrows, ncols, figsize=(20, 4.8 * nrows),
+                         sharex=True, squeeze=False)
 city_axes = axes.ravel()
 
 legend_handles = None
@@ -667,79 +761,42 @@ for ax, (name, city_lat, city_lon, category) in zip(city_axes, CITIES):
     i, j = nearest_valid(main["beta0"], city_lat, city_lon)
 
     b0v = main["beta0"][i, j]
-    bEv = main["b1"][i, j]
-    bSv = main["b2"][i, j]
+    b1v = main["b1"][i, j]
+    b2v = main["b2"][i, j]
     r2v = main["r2"][i, j]
 
-    cS = bSv * soi_z1d
-    cE = bEv * emission_z[:, i, j]
+    # driver contributions at this cell
+    c1 = b1v * P1_MAIN[:, i, j]
+    c2 = b2v * (soi_z1d if MODE == 0 else P2_MAIN[:, i, j])
 
-    # Prediction includes beta0, but the beta0 contribution is not plotted as a bar.
-    pred = b0v + cS + cE
+    # Prediction includes beta0, which is not plotted as a bar.
+    pred = b0v + c1 + c2
 
     obs = Ytarget[:, i, j]
     obs_err = Yerr[:, i, j]
 
-    ax.fill_between(
-        ds_years,
-        global_lo,
-        global_hi,
-        color="0.75",
-        alpha=0.45,
-        label="Global mean ± 1 SD",
-        zorder=0,
-    )
-    ax.plot(
-        ds_years,
-        global_mean,
-        color="0.45",
-        lw=1.4,
-       # label="global land mean",
-       # zorder=1,
-    )
+    ax.fill_between(ds_years, global_lo, global_hi, color="0.75", alpha=0.45,
+                    label="Global mean \u00b1 1 SD", zorder=0)
+    ax.plot(ds_years, global_mean, color="0.45", lw=1.4)
 
-    stacked_signed_bar(
-        ax,
-        ds_years,
-        [cS, cE],
-        labels=[r"$\beta_{SOI}\,SOI_z$", r"$\beta_E\,E_z$"],
-        facecolors=["tab:blue", "tab:orange"],
-    )
+    stacked_signed_bar(ax, ds_years, [c1, c2],
+                       labels=[P1_MATH, P2_MATH], facecolors=BAR_COLORS)
 
     yerr_plot = np.where(np.isfinite(obs_err), obs_err, np.nan)
 
-    ax.errorbar(
-        ds_years,
-        obs,
-        yerr=yerr_plot,
-        fmt="k-o",
-        lw=2.0,
-        ms=4.8,
-        capsize=3.0,
-        elinewidth=1.0,
-        label="observed ± growth_err",
-        zorder=7,
-    )
-
-    ax.plot(
-        ds_years,
-        pred,
-        "--s",
-        color="tab:red",
-        lw=1.8,
-        ms=4.2,
-        label="predicted",
-        zorder=7,
-    )
-
+    ax.errorbar(ds_years, obs, yerr=yerr_plot, fmt="k-o", lw=2.0, ms=4.8,
+                capsize=3.0, elinewidth=1.0, label="CAMS \u00b1 growth_err",
+                zorder=7)
+    ax.plot(ds_years, pred, "--s", color="tab:red", lw=1.8, ms=4.2,
+            label="predicted", zorder=7)
     ax.axhline(0, color="black", lw=0.8)
 
     ax.set_title(
         f"{name} ({category})\n"
-        rf"$\beta_0$={b0v:.2f}, $\beta_{{SOI}}$={bSv:.2f}, "
-        rf"$\beta_E$={bEv:.2f}, R²={r2v:.2f}",
-        fontsize=10.5,
-        fontweight="bold",
+        f"{fmt_coord(city_lat, city_lon)}\n"
+        rf"$\beta_0$={b0v:.2f}, ${P1_SHORT}$={b1v:.2f}, "
+        rf"${P2_SHORT}$={b2v:.2f}, $R^2$={r2v:.2f}",
+        fontsize=10.5, fontweight="bold",
     )
 
     ax.grid(True, axis="y", alpha=0.25)
@@ -749,29 +806,21 @@ for ax, (name, city_lat, city_lon, category) in zip(city_axes, CITIES):
     if legend_handles is None:
         legend_handles, legend_labels = ax.get_legend_handles_labels()
 
-# Hide unused panels if the city list does not exactly fill the grid.
 for ax in city_axes[n_cities:]:
     ax.axis("off")
 
 for ax in axes[:, 0]:
     ax.set_ylabel("growth rate / contribution (ppm/yr)")
-
 for ax in axes[-1, :]:
     ax.set_xlabel("year")
 
 if legend_handles is not None:
-    fig.legend(
-        legend_handles,
-        legend_labels,
-        loc="lower center",
-        ncol=4,
-        fontsize=11,
-        bbox_to_anchor=(0.5, -0.01),
-    )
+    fig.legend(legend_handles, legend_labels, loc="lower center", ncol=5,
+               fontsize=11, bbox_to_anchor=(0.5, -0.01))
 
 fig.tight_layout(rect=[0, 0.035, 1, 0.99])
-fig.savefig(OUTDIR / "soi_city_contribution_3x3.png", dpi=115, bbox_inches="tight")
+fig.savefig(outpath(f"city_contribution_{nrows}x{ncols}"), bbox_inches="tight")
 plt.close(fig)
+print("saved", outpath(f"city_contribution_{nrows}x{ncols}").name)
 
-print("saved soi_city_contribution_3x3.png")
 print("ALL DONE")
