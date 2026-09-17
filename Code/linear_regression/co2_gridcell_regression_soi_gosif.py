@@ -121,8 +121,8 @@ NCDIR.mkdir(parents=True, exist_ok=True)
 FIG_EXT = "pdf"          # vector output
 SAVE_NETCDF = True       # also write beta maps as NetCDF
 
-# YEARS = [2016, 2018, 2020, 2022, 2024]
-YEARS = [2015, 2017, 2019, 2021, 2023]
+YEARS = [2016, 2018, 2020, 2022, 2024]
+#YEARS = [2015, 2017, 2019, 2021, 2023]
 
 SOI_LAG_MONTHS = 7
 MIN_OBS = 6
