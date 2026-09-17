@@ -12,25 +12,36 @@ not their absolute values. MODE 0 uses the absolute emission field together
 with the global lagged SOI index. The switch therefore changes both the second
 predictor AND whether the drivers are differenced.
 
-Required in the same directory:
-  - unified_annual_carbon_dataset_2015_2024.nc
-  - SOI.txt                                   (only needed when MODE = 0)
+PATHS
+-----
+All paths are resolved RELATIVE TO THE REPOSITORY, never to the machine, so
+this runs unchanged for anyone who clones complexity72_2026. The script walks
+up from its own location to find the repo root, so it also keeps working if it
+is moved to a different depth inside Code/.
+
+  Reads   Input/unified_annual_carbon_dataset_2015_2024.nc
+          Input/SOI.txt                      (only when MODE = 0)
+  Writes  Figures_and_maps/*.pdf             (figures, vector)
+          Output/*_beta_maps.nc              (regression coefficients)
+
+Run it from anywhere:
+    python Code/linear_regression/co2_gridcell_regression_soi_gosif.py
 
 Outputs (all figures vector PDF; beta maps also written as NetCDF):
 
   MODE = 0 (SOI)
-    outputs/soi_main_obs_pred_resid.pdf        Fig 3 of Main
-    outputs/soi_variants.pdf                   Fig 1 of Supplementary
-    outputs/soi_beta_r2_2x2.pdf                Fig 2 of Supplementary
-    outputs/soi_city_contribution_4x3.pdf      Fig 4 of Main, updated
-    outputs/soi_beta_maps.nc                   beta0, bE, bSOI, R2 as NetCDF
+    Figures_and_maps/soi_main_obs_pred_resid.pdf         Fig 3 of Main
+    Figures_and_maps/soi_variants.pdf                    Fig 1 of Supplementary
+    Figures_and_maps/soi_beta_r2_2x2.pdf                 Fig 2 of Supplementary
+    Figures_and_maps/soi_city_contribution_4x3.pdf       Fig 4 of Main, updated
+    Output/soi_beta_maps.nc                  beta0, bE, bSOI, R2 as NetCDF
 
   MODE = 1 (GOSIF)
-    outputs/delta_sif_main_obs_pred_resid.pdf  Fig 3 of Supplementary
-    outputs/delta_sif_variants.pdf             Fig 4 of Supplementary
-    outputs/delta_sif_beta_r2_2x2.pdf          Fig 5 of Supplementary
-    outputs/delta_sif_city_contribution_4x3.pdf Fig 6 of Supplementary
-    outputs/delta_sif_beta_maps.nc             beta0, bdE, bdSIF, R2 as NetCDF
+    Figures_and_maps/delta_sif_main_obs_pred_resid.pdf   Fig 3 of Supplementary
+    Figures_and_maps/delta_sif_variants.pdf              Fig 4 of Supplementary
+    Figures_and_maps/delta_sif_beta_r2_2x2.pdf           Fig 5 of Supplementary
+    Figures_and_maps/delta_sif_city_contribution_4x3.pdf Fig 6 of Supplementary
+    Output/delta_sif_beta_maps.nc            beta0, bdE, bdSIF, R2 as NetCDF
 """
 
 import re
@@ -74,21 +85,44 @@ if HAS_CARTOPY:
 MODE = 0
 # -------------------------------------------------------------------------
 
+# --- locate the repository root -------------------------------------------
+# The script finds the repo root by walking up from its own location until it
+# sees the expected folders (or the .git directory). This means it works from
+# ANY depth inside Code/ and for anyone who clones the repository, with no
+# machine-specific paths to edit.
+
+def find_repo_root(start: Path) -> Path:
+    """Walk up from `start` until a folder containing Input/ and Output/
+    (or .git) is found. Raises a clear error if the layout is unexpected."""
+    for folder in [start, *start.parents]:
+        if (folder / "Input").is_dir() and (folder / "Output").is_dir():
+            return folder
+        if (folder / ".git").exists():
+            return folder
+    raise FileNotFoundError(
+        f"Could not locate the repository root above {start}.\n"
+        "Expected to find a folder containing Input/ and Output/. "
+        "Run this script from inside a clone of complexity72_2026."
+    )
+
+
 BASE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = find_repo_root(BASE_DIR)
 
-INPUT_FILE = BASE_DIR.parent / "Input" / "unified_annual_carbon_dataset_2015_2024.nc"
-SOI_FILE   = BASE_DIR.parent / "Input" / "SOI.txt"
+INPUT_DIR = REPO_ROOT / "Input"
+INPUT_FILE = INPUT_DIR / "unified_annual_carbon_dataset_2015_2024.nc"
+SOI_FILE   = INPUT_DIR / "SOI.txt"
 
-FIGDIR = BASE_DIR.parent / "Figures_and_maps"
-NCDIR  = BASE_DIR.parent / "Output"
+FIGDIR = REPO_ROOT / "Figures_and_maps"
+NCDIR  = REPO_ROOT / "Output"
 FIGDIR.mkdir(parents=True, exist_ok=True)
 NCDIR.mkdir(parents=True, exist_ok=True)
 
 FIG_EXT = "pdf"          # vector output
 SAVE_NETCDF = True       # also write beta maps as NetCDF
 
-YEARS = [2016, 2018, 2020, 2022, 2024]
-#YEARS = [2015, 2017, 2019, 2021, 2023]
+# YEARS = [2016, 2018, 2020, 2022, 2024]
+YEARS = [2015, 2017, 2019, 2021, 2023]
 
 SOI_LAG_MONTHS = 7
 MIN_OBS = 6
