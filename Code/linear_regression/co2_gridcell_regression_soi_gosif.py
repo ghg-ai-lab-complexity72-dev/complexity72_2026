@@ -82,7 +82,7 @@ if HAS_CARTOPY:
 #  MODE = 0 : use SOI   (DSS) as second predictor, absolute emission
 #  MODE = 1 : use GOSIF (DSb) as second predictor, differenced drivers
 # -------------------------------------------------------------------------
-MODE = 0
+MODE = 1
 # -------------------------------------------------------------------------
 
 # --- locate the repository root -------------------------------------------
