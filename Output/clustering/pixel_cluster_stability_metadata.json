@@ -1,0 +1,27 @@
+{
+  "format": "upper_triangle_row_major",
+  "pixel_count": 21537,
+  "stored_value_count": 231931953,
+  "cluster_columns": [
+    "kmeans_cluster_2015",
+    "kmeans_cluster_2016",
+    "kmeans_cluster_2017",
+    "kmeans_cluster_2018",
+    "kmeans_cluster_2019",
+    "kmeans_cluster_2020",
+    "kmeans_cluster_2021",
+    "kmeans_cluster_2022",
+    "kmeans_cluster_2023",
+    "kmeans_cluster_2024",
+    "kmeans_cluster_2025"
+  ],
+  "year_count": 11,
+  "pixel_index_file": "pixel_index.csv",
+  "same_count_file": "pixel_cluster_stability_upper_uint8.bin",
+  "same_count_dtype": "uint8",
+  "same_count_meaning": "number of comparable years where two pixels are in the same cluster",
+  "indexing": "pixels are 1-based in pixel_index.csv, but binary offsets are 0-based",
+  "storage_order": "for row i from 0 to N-1, values are stored for columns j=i..N-1",
+  "denominator_file": null,
+  "probability": "same_count / 11"
+}
