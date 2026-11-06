@@ -1,3 +1,5 @@
+**Note:** This README was generated with the assistance of AI. Please verify details before relying on it.
+
 # Cluster Stability Pipeline
 
 Three-stage pipeline that clusters annual carbon data with KMeans and analyses how stable those clusters are across years. Starting from a single NetCDF file, it produces per-year cluster maps, a pixel-level same-cluster co-occurrence matrix, and maps of persistent connected components — plus a long-format CSV ready for downstream modelling.
