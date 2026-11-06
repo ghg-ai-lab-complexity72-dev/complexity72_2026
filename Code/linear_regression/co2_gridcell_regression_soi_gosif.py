@@ -82,7 +82,7 @@ if HAS_CARTOPY:
 #  MODE = 0 : use SOI   (DSS) as second predictor, absolute emission
 #  MODE = 1 : use GOSIF (DSb) as second predictor, differenced drivers
 # -------------------------------------------------------------------------
-MODE = 1
+MODE = 0
 # -------------------------------------------------------------------------
 
 # --- locate the repository root -------------------------------------------
@@ -110,7 +110,7 @@ BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = find_repo_root(BASE_DIR)
 
 INPUT_DIR = REPO_ROOT / "Input"
-INPUT_FILE = INPUT_DIR / "unified_annual_carbon_dataset_2015_2024.nc"
+INPUT_FILE = INPUT_DIR / "unified_annual_carbon_dataset_2015_2025.nc"
 SOI_FILE   = INPUT_DIR / "SOI.txt"
 
 FIGDIR = REPO_ROOT / "Figures_and_maps"
