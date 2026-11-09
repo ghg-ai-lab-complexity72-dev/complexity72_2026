@@ -1,4 +1,3 @@
-
 # complexity72_2026
 
 Analysis code and derived data for our study of annual atmospheric CO₂ growth, 
@@ -32,11 +31,16 @@ Python 3.10+.
 
 ```bash
 pip install numpy pandas xarray netcdf4 matplotlib cartopy shapely
-cartopy and shapely are only needed for the map figures. xarray +
-netcdf4 are needed for loading the input dataset.
+```
+
+`cartopy` and `shapely` are only needed for the map figures. `xarray` + 
+`netcdf4` are needed for loading the input dataset.
+
+---
 
 ## Repository layout
 
+```
 complexity72_2026/
 ├── Code/
 │   ├── clustering/                          Pipeline A
@@ -54,79 +58,98 @@ complexity72_2026/
 │   └── clustering/
 ├── old_backup_AUG25/                        Archived notebooks and CSVs
 └── index.html                               Interactive dashboard landing page
-All scripts locate the repository root automatically by walking up from their
-own directory until they find Input/ and Output/, so they run unchanged
+```
+
+All scripts locate the repository root automatically by walking up from their 
+own directory until they find `Input/` and `Output/`, so they run unchanged 
 from any clone location.
 
+---
+
 ## Pipeline A — clustering & stability
-Per-year KMeans clustering of land grid cells on emission and gosif,
-followed by a connected-component analysis of which pixel groups stay
+
+Per-year KMeans clustering of land grid cells on `emission` and `gosif`, 
+followed by a connected-component analysis of which pixel groups stay 
 clustered together across years.
 
-Run in order from Code/clustering/:
+Run in order from `Code/clustering/`:
 
-bash
+```bash
 python k_means.py                 # cluster each year, write per-pixel labels
 python cre_matrix.py              # build same-cluster co-occurrence matrix
 python run_stability_pipeline.py  # detect persistent components, plot them
-Key outputs
+```
 
-Stage	Outputs
-k_means.py	kmeans_classified_points_all_years.csv (input to stages 2–3), per-year cluster maps and mean-profile charts, cached k-selection scores
-cre_matrix.py	pixel_cluster_stability_upper_uint8.bin — upper-triangle same-cluster counts, plus pixel_index.csv and metadata JSON
-run_stability_pipeline.py	co-occurrence-clusters.csv (long format, one-hot component membership), component-size histogram and persistent-component maps
-The number of clusters k per year is selected automatically (elbow by
-default, silhouette optional), typically landing on k = 4 or k = 5.
+**Key outputs**
+
+| Stage | Outputs |
+|---|---|
+| `k_means.py` | `kmeans_classified_points_all_years.csv` (input to stages 2–3), per-year cluster maps and mean-profile charts, cached k-selection scores |
+| `cre_matrix.py` | `pixel_cluster_stability_upper_uint8.bin` — upper-triangle same-cluster counts, plus `pixel_index.csv` and metadata JSON |
+| `run_stability_pipeline.py` | `co-occurrence-clusters.csv` (long format, one-hot component membership), component-size histogram and persistent-component maps |
+
+The number of clusters `k` per year is selected automatically (`elbow` by 
+default, `silhouette` optional), typically landing on `k = 4` or `k = 5`. 
 All settings live at the top of each script.
 
-Full details: Code/clustering/README.md.
+Full details: [`Code/clustering/README.md`](Code/clustering/README.md).
 
-##Pipeline B — grid-cell regression
-Per-land-grid-cell regression of the annual CO₂ growth rate on two drivers,
-with a MODE switch between the two specifications in the paper:
+---
 
-MODE = 0 (SOI model, DSS): growth ~ β₀ + β_E·E_z + β_SOI·SOI_z
+## Pipeline B — grid-cell regression
 
-MODE = 1 (GOSIF model, DSb): growth ~ β₀ + β_ΔE·ΔE_z + β_ΔSIF·ΔSIF_z
+Per-land-grid-cell regression of the annual CO₂ growth rate on two drivers, 
+with a `MODE` switch between the two specifications in the paper:
 
-The GOSIF specification uses year-to-year differences of the drivers;
-the SOI specification uses the absolute emission field with a 7-month-lagged
+- **`MODE = 0` (SOI model, DSS):** `growth ~ β₀ + β_E·E_z + β_SOI·SOI_z`
+- **`MODE = 1` (GOSIF model, DSb):** `growth ~ β₀ + β_ΔE·ΔE_z + β_ΔSIF·ΔSIF_z`
+
+The GOSIF specification uses **year-to-year differences** of the drivers; 
+the SOI specification uses the **absolute** emission field with a 7-month-lagged 
 global SOI index.
 
-bash
+```bash
 cd Code/linear_regression
 python co2_gridcell_regression_soi_gosif.py    # edit MODE at the top to switch
-Each mode writes its own output prefix (soi_ or delta_sif_), so the two
-never overwrite each other. Run the script twice — once per mode — to
+```
+
+Each mode writes its own output prefix (`soi_` or `delta_sif_`), so the two 
+never overwrite each other. Run the script twice — once per mode — to 
 regenerate all regression figures.
 
-Reads
+**Reads**
 
-Input/unified_annual_carbon_dataset_2015_2024.nc
+- `Input/unified_annual_carbon_dataset_2015_2024.nc`
+- `Input/SOI.txt` (MODE 0 only)
 
-Input/SOI.txt (MODE 0 only)
+**Writes**
 
-Writes
+- `Figures_and_maps/` — observed / predicted / residual maps, variants, 
+  beta and R² maps, per-location contribution figures (PDF).
+- `Output/` — `soi_beta_maps.nc` / `delta_sif_beta_maps.nc` containing 
+  `beta0`, the two driver betas, and `R²` on the native grid 
+  (ocean cells as `NaN`).
 
-Figures_and_maps/ — observed / predicted / residual maps, variants,
-beta and R² maps, per-location contribution figures (PDF).
+Full details: [`Code/linear_regression/README.md`](Code/linear_regression/README.md).
 
-Output/ — soi_beta_maps.nc / delta_sif_beta_maps.nc containing
-beta0, the two driver betas, and R² on the native grid
-(ocean cells as NaN).
+---
 
-Full details: Code/linear_regression/README.md.
+## Data
 
-##Data
-File	Description
-Input/unified_annual_carbon_dataset_2015_2025.nc	Main grid: annual growth_rate, growth_err, emission, gosif, delta_emission, delta_gosif, 2015–2025
-Input/unified_annual_carbon_dataset_2015_2024.nc	Same fields, 2015–2024 — used by the regression for a common baseline
-Input/SOI.txt	NOAA/CPC monthly Southern Oscillation Index (standardized block)
-Input/tccon_all_stations_annual_growth_rates.nc	TCCON station observations (validation)
+| File | Description |
+|---|---|
+| `Input/unified_annual_carbon_dataset_2015_2025.nc` | Main grid: annual `growth_rate`, `growth_err`, `emission`, `gosif`, `delta_emission`, `delta_gosif`, 2015–2025 |
+| `Input/unified_annual_carbon_dataset_2015_2024.nc` | Same fields, 2015–2024 — used by the regression for a common baseline |
+| `Input/SOI.txt` | NOAA/CPC monthly Southern Oscillation Index (standardized block) |
+| `Input/tccon_all_stations_annual_growth_rates.nc` | TCCON station observations (validation) |
+
 Datasets are read directly by both pipelines; they are not regenerated here.
 
-Quick start
-bash
+---
+
+## Quick start
+
+```bash
 git clone <repo-url>
 cd complexity72_2026
 pip install numpy pandas xarray netcdf4 matplotlib cartopy shapely
@@ -142,12 +165,17 @@ cd ../linear_regression
 python co2_gridcell_regression_soi_gosif.py    # MODE = 0
 # edit MODE = 1 at the top of the file, then rerun
 python co2_gridcell_regression_soi_gosif.py
-All figures appear in Figures_and_maps/; all derived data in Output/.
+```
 
-Citation
+All figures appear in `Figures_and_maps/`; all derived data in `Output/`.
+
+---
+
+## Citation
+
 If you use this code or data, please cite:
 
-bibtex
+```bibtex
 @article{bali2026investigation,
   title   = {Investigation of regional variations in CO$_2$ growth rates: 
              Integrating Emission Inventories and Atmospheric Observations},
@@ -159,6 +187,11 @@ bibtex
   year    = {2026},
   url     = {https://arxiv.org/abs/2606.28462}
 }
-License
-Code is released for research use. See Input/README.md for dataset
+```
+
+---
+
+## License
+
+Code is released for research use. See `Input/README.md` for dataset 
 provenance and licensing.
