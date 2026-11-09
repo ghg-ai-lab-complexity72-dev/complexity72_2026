@@ -84,3 +84,46 @@ inspect). Coefficients are in ppm yr⁻¹ per 1 standard deviation of the driver
 | `SAVE_NETCDF` | `True` | Also write coefficient maps to `Output/` |
 | `CITIES` | 12 entries | Locations in the contribution figure (4 rows × 3 columns) |
 
+
+---
+
+# `co2_cluster_regression_soi_gosif.py`
+
+Cluster-level regression (Fig. 7, Main). For each persistent cluster C1–C5 and
+year, growth rate, emission and GOSIF are averaged over the cluster's grid
+cells, and two OLS models are fitted to the 10-year cluster-mean series:
+
+| Model | Predictors |
+|---|---|
+| SOI | `y ~ β₀ + β_E·E_z + β_SOI·SOI_z` (7-month-lagged SOI) |
+| GOSIF | `y ~ β₀ + β_E·E_z + β_SIF·GOSIF_z` (cluster-mean GOSIF) |
+
+
+The figure uses the same style as Fig. 4: grey band = area-weighted global land
+mean ± 1 SD; black = observed cluster mean with propagated error bars; red
+dashed = prediction; bars = β_E·E_z and β₂·P_z (β₀ omitted).
+
+**Error propagation.** Each grid cell carries a 1-σ uncertainty `growth_err`
+(σᵢ). Because CAMS errors are strongly correlated between neighbouring cells,
+the error of the cluster mean is propagated assuming fully correlated cell
+errors:
+
+σ(ȳ) = (1/N) Σᵢ σᵢ
+
+Cells without `growth_err` are left out, and N is then the number of cells with
+a finite error (this affects mainly C1 in 2015–2016, where about half of the
+cells, mostly polar, have no error value).
+
+**Reads** `Input/unified_annual_carbon_dataset_2015_2025.nc`  `Input/SOI.txt`,
+`Output/clustering/co-occurrence-clusters.csv`. 
+**Writes**
+
+| File | Content |
+|---|---|
+| `Figures_and_maps/cluster_contribution_5x2.pdf` | Fig. 7, Main |
+| `Output/cluster_regression_coefficients.csv` | β₀, β_E, β₂, R², LOO R² per cluster and model |
+| `Output/cluster_mean_timeseries.csv` | cluster-year means, N cells, propagated error |
+
+
+
+Dependencies: numpy, pandas, xarray, netCDF4, matplotlib, global-land-mask.
