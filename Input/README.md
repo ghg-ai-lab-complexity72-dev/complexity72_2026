@@ -6,4 +6,4 @@ Raw datasets
 3. `tccon_all_stations_annual_growth_rates file`
 
 
-::warning:: MISSING `gridpoint_regression_...` files from ipynb notebooks- @Adrian?
+::warning:: MISSING `gridpoint_regression_...` files from ipynb notebooks- @Adrian? This should be in the Output folder.
