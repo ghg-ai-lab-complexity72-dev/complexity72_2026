@@ -1,4 +1,4 @@
-markdown
+
 # complexity72_2026
 
 Analysis code and derived data for our study of annual atmospheric CO₂ growth, 
