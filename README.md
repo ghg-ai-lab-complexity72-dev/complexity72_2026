@@ -35,8 +35,8 @@ pip install numpy pandas xarray netcdf4 matplotlib cartopy shapely
 cartopy and shapely are only needed for the map figures. xarray +
 netcdf4 are needed for loading the input dataset.
 
-Repository layout
-text
+## Repository layout
+
 complexity72_2026/
 ├── Code/
 │   ├── clustering/                          Pipeline A
@@ -58,7 +58,7 @@ All scripts locate the repository root automatically by walking up from their
 own directory until they find Input/ and Output/, so they run unchanged
 from any clone location.
 
-Pipeline A — clustering & stability
+## Pipeline A — clustering & stability
 Per-year KMeans clustering of land grid cells on emission and gosif,
 followed by a connected-component analysis of which pixel groups stay
 clustered together across years.
@@ -81,7 +81,7 @@ All settings live at the top of each script.
 
 Full details: Code/clustering/README.md.
 
-Pipeline B — grid-cell regression
+##Pipeline B — grid-cell regression
 Per-land-grid-cell regression of the annual CO₂ growth rate on two drivers,
 with a MODE switch between the two specifications in the paper:
 
@@ -117,7 +117,7 @@ beta0, the two driver betas, and R² on the native grid
 
 Full details: Code/linear_regression/README.md.
 
-Data
+##Data
 File	Description
 Input/unified_annual_carbon_dataset_2015_2025.nc	Main grid: annual growth_rate, growth_err, emission, gosif, delta_emission, delta_gosif, 2015–2025
 Input/unified_annual_carbon_dataset_2015_2024.nc	Same fields, 2015–2024 — used by the regression for a common baseline
