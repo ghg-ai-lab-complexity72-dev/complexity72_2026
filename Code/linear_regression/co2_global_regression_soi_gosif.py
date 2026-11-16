@@ -6,7 +6,7 @@ Companion to `co2_gridcell_regression_soi_gosif.py`. Instead of fitting one
 regression per grid cell, the whole globe is first aggregated to a single
 annual time series, and ONE regression is fitted on those annual points (2015-2025):
 
-    MODE = 0  ->  SOI model   : G(t) ~ b0 + bE*E_z(t)  + bSOI*SOI_z(t) (the good fit)
+    MODE = 0  ->  SOI model   : G(t) ~ b0 + bE*E_z(t)  + bSOI*SOI_z(t)
     MODE = 1  ->  GOSIF model : G(t) ~ b0 + bdE*dE_z(t) + bdSIF*dSIF_z(t)
 
 where G(t) is the area-weighted global mean growth rate, E(t) the global TOTAL
@@ -21,6 +21,14 @@ HOW THE AGGREGATION IS DONE  (this matters, see AGGREGATION below)
                 summing would over-weight small polar cells
   SOI         : already a single global index, 7-month lag as elsewhere
 
+ERROR BARS
+  Each cell carries a 1-sigma uncertainty `growth_err` (sigma_i). As in the
+  cluster figure (Fig. 7), CAMS errors are treated as fully correlated between
+  cells, so the error of the area-weighted mean is the area-weighted mean of
+  the cell errors:  sigma(G) = sum_i w_i sigma_i / sum_i w_i,  w_i = cos(lat_i),
+  over the cells (in GROWTH_DOMAIN) with a finite growth rate and error.
+  The error bars are shown in the figure; the OLS fit itself is unweighted.
+
 Because there are only 11 annual samples (2015-2025; 10 in MODE = 1, where the
 first year is lost to differencing), this fit has 8 (7) degrees of freedom.
 The script therefore reports standard errors, t- and p-values, and a
@@ -29,11 +37,11 @@ the gap between them is the honest measure of how much is overfitting.
 
 PATHS
 -----
+Resolved relative to the repository, so this runs unchanged for anyone who
+clones complexity72_2026, from any working directory and any depth in Code/.
 
   Reads   Input/unified_annual_carbon_dataset_2015_2025.nc
           Input/SOI.txt                          (only when MODE = 0)
-  Writes  Figures_and_maps/global_regression_<prefix>.pdf
-  (coefficients, SE, t, p, R2, adjusted R2 and LOO R2 are printed to screen)
 
 """
 
@@ -185,6 +193,7 @@ years = ds["time"].values.astype(int)
 T = len(years)
 
 gr = ds["growth_rate"].transpose("time", "lat", "lon").values.astype(float)
+gerr = ds["growth_err"].transpose("time", "lat", "lon").values.astype(float)
 emis = ds["emission"].transpose("time", "lat", "lon").values.astype(float)
 sif = ds["gosif"].transpose("time", "lat", "lon").values.astype(float)
 
@@ -224,6 +233,21 @@ def plain_sum(field2d, mask=None):
 growth_mask = None if GROWTH_DOMAIN == "global" else land2d
 
 G = np.array([area_weighted_mean(gr[t], growth_mask) for t in range(T)])
+
+
+def correlated_error(err2d, val2d, mask=None):
+    """Area-weighted mean of the cell errors (fully correlated errors),
+    over cells with a finite value and a finite error."""
+    m = np.isfinite(val2d) & np.isfinite(err2d)
+    if mask is not None:
+        m &= mask
+    if not m.any():
+        return np.nan
+    return np.sum(w2d[m] * err2d[m]) / np.sum(w2d[m])
+
+
+G_err = np.array([correlated_error(gerr[t], gr[t], growth_mask)
+                  for t in range(T)])
 E_tot = np.array([plain_sum(emis[t], land2d) for t in range(T)])
 
 if SIF_AGGREGATION == "area_weighted_sum":
@@ -241,6 +265,8 @@ if MODE == 0:
 
 print(f"\nglobal mean growth rate ({GROWTH_DOMAIN}): "
       f"{G.min():.2f} to {G.max():.2f} ppm/yr, mean {G.mean():.2f}")
+print("propagated error (correlated): "
+      f"{np.nanmin(G_err):.2f} to {np.nanmax(G_err):.2f} ppm/yr")
 
 
 # ====================== BUILD THE DESIGN MATRIX ==========================
@@ -334,8 +360,10 @@ fig, (ax, axb) = plt.subplots(
     gridspec_kw={"height_ratios": [2.0, 1.0], "hspace": 0.08})
 
 # --- top: observed vs predicted global mean growth rate ---
-ax.plot(years, G, "k-o", lw=2, ms=5, label="Observed (CAMS global mean)",
-        zorder=5)
+ax.errorbar(years, G, yerr=G_err, fmt="k-o", lw=2, ms=5, capsize=3.0,
+            elinewidth=1.0,
+            label=r"Observed (CAMS global mean $\pm$ growth_err)",
+            zorder=5)
 ax.plot(years, pred_full, "--s", color="tab:red", lw=1.8, ms=4.5,
         label="Predicted", zorder=6)
 ax.set_ylabel("CO$_2$ growth rate (ppm/yr)")
