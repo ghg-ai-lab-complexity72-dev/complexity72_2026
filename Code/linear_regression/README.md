@@ -127,3 +127,30 @@ cells, mostly polar, have no error value).
 
 
 Dependencies: numpy, pandas, xarray, netCDF4, matplotlib, global-land-mask.
+
+---
+
+# `co2_global_regression_soi_gosif.py`
+
+Global-mean counterpart of `co2_gridcell_regression_soi_gosif.py`: the whole
+globe is aggregated to one annual time series and a single OLS regression is
+fitted to it.
+
+| | `MODE = 0` | `MODE = 1` |
+|---|---|---|
+| Model | `G ~ β₀ + β_E·E_z + β_SOI·SOI_z` | `G ~ β₀ + β_ΔE·ΔE_z + β_ΔSIF·ΔSIF_z` |
+| Drivers | **absolute** total emission + 7-month-lagged SOI | **year-to-year differences** of total emission and global GOSIF |
+| Needs `Input/SOI.txt` | 
+
+
+**Aggregation**
+
+* growth rate: area-weighted (cos lat) mean; `GROWTH_DOMAIN = "global"` (all cells) or `"land"` (only land cells)
+* emission: plain sum over land cells (total mass emitted)
+* GOSIF: area-weighted sum over land cells (`SIF_AGGREGATION`; alternatives
+  `"area_weighted_mean"`, `"raw_sum"`)
+
+With only 11 annual samples, 2015–2025, the script reports standard errors, t- and p-values, adjusted R² and the leave-one-year-out R² (hat-matrix
+shortcut) next to the in-sample R².
+
+
